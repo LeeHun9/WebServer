@@ -13,126 +13,85 @@
 #define SERV_PORT 8000
 #define OPEN_MAX 1024
 #define CLI_NUM 3
-//https://developer.aliyun.com/article/398525
+
 int client_fds[OPEN_MAX];
 
 int main() {
-    int ser_souck_fd, nfds;
-    int i;  
-    char input_message[BUFF_SIZE];
-    char resv_message[BUFF_SIZE];
- 
- 
-    struct sockaddr_in ser_addr;
-    ser_addr.sin_family= AF_INET;    //IPV4
-    ser_addr.sin_port = htons(SERV_PORT);
-    ser_addr.sin_addr.s_addr = INADDR_ANY;  //指定的是所有地址
 
-    struct epoll_event ev, events[20];
+    // create socket
+    int lfd = socket(PF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in saddr;
+    saddr.sin_port = htons(8000);
+    saddr.sin_addr.s_addr = INADDR_ANY;
+    saddr.sin_family = AF_INET;
 
-    //fd_set
-    int efd = epoll_create(OPEN_MAX);
-    if (efd == -1) {
-        perror("epoll_create failure");
-        return -1;
-    }
+    // bind socket
+    bind(lfd, (struct sockaddr *)&saddr, sizeof(saddr));
 
+    // listen
+    listen(lfd, 8);
 
-    //creat socket
-    if( (ser_souck_fd = socket(AF_INET,SOCK_STREAM,0)) < 0 )
-    {
-        perror("creat failure");
-        return -1;
-    }
+    // 创建epoll实例
+    int epfd = epoll_create(100);
 
-    //bind soucket
-    if(bind(ser_souck_fd, (const struct sockaddr *)&ser_addr,sizeof(ser_addr)) < 0)
-    {
-        perror("bind failure");
-        return -1;
-    }
+    // 添加lfd到epoll实例
+    struct epoll_event epev;
+    epev.data.fd = lfd;
+    epev.events = EPOLLIN;
+    epoll_ctl(epfd, EPOLL_CTL_ADD, lfd, &epev);
 
-    //listen
-    if(listen(ser_souck_fd, 20) < 0)
-    {
-        perror("listen failure");
-        return -1;
-    }
-
-    ev.data.fd = ser_souck_fd;
-    ev.events = EPOLLIN|EPOLLET;
-    epoll_ctl(efd, EPOLL_CTL_ADD, ser_souck_fd, &ev);
-
-    int max_fd=1;
-    struct timeval mytime;
-    printf("wait for client connnect!\n");
+    struct epoll_event epevs[1024];
 
     while (1) {
-        nfds = epoll_wait(efd, events, 20, 0);
 
-        for (i = 0; i < nfds; i++) {
+        // 查询epoll
+        int ret = epoll_wait(epfd, epevs, 1024, -1);
+        if (ret == -1) {
+            perror("epoll_wait");
+            exit(-1);
+        }
 
-            // ser_souck_fd监听到有新用户连接
-            if (events[i].data.fd == ser_souck_fd) {
-                struct sockaddr_in client_address;
-                socklen_t address_len;
-                int client_sock_fd = accept(ser_souck_fd, (struct sockaddr *)&client_address, &address_len);
-                if (client_sock_fd < 0) {
-                    perror("accept failure");
-                    return -1;
-                }
-                
-                // 打印客户端信息
-                char* str = inet_ntoa(client_address.sin_addr);
-                printf("accept connection from %s\n", str);
+        printf("ret = %d\n", ret);
 
-                // 注册EPOLL事件
-                ev.data.fd = client_sock_fd;
-                ev.events = EPOLLIN|EPOLLET;
-                epoll_ctl(efd, EPOLL_CTL_ADD, client_sock_fd, &ev);
-                
+
+        // 遍历epoll返回的描述符
+        for (int i = 0; i < ret; i++) {
+            int curfd = epevs[i].data.fd;
+
+            // epoll监听的lfd有数据到达，有客户端连接
+            if (curfd == lfd) {
+                struct sockaddr_in cliaddr;
+                socklen_t len = sizeof(cliaddr);
+                int cfd = accept(lfd, (struct sockaddr*)&cliaddr, &len);
+
+                // 将客户端描述符也加入epoll
+                epev.events = EPOLLIN;
+                epev.data.fd = cfd;
+                epoll_ctl(epfd, EPOLL_CTL_ADD, cfd, &epev);
             }
-            // 该用户已已连接
-            else if (events[i].events & EPOLLIN) {
-                int client_fd = events[i].data.fd;
-                if (client_fd < 0) 
+            else {
+                if (epevs[i].events & EPOLLOUT) {
                     continue;
-                int nread;
-                if ((nread = read(events[i].data.fd, resv_message, BUFF_SIZE)) < 0) {
-                    if (errno == ECONNRESET) {
-                        close(client_fd);
-                        events[i].data.fd = -1;
-                    }
-                    else printf("rescessed error!");
                 }
-                else if (nread > 0) {
-                    printf("message form client[%d]:%s\n", i, resv_message);
-                    // 读完之后准备写
-                    ev.data.fd=client_fd;
-                    ev.events=EPOLLOUT|EPOLLET;
-                    epoll_ctl(efd, EPOLL_CTL_MOD, client_fd, &ev);
-                    
+                char buf[1024] = {0};
+                int len = read(curfd, buf, sizeof(buf));
+                if (len == -1) {
+                    perror("read");
+                    exit(-1);
+                } else if (len == 0) {
+                    printf("client close...\n");
+                    epoll_ctl(epfd, EPOLL_CTL_DEL, curfd, NULL);
+                    close(curfd);
+                } else if (len > 0) {
+                    printf("read buf = %s\n", buf);
+                    write(curfd, buf, strlen(buf) + 1);
                 }
-                else{
-                    close(client_fd);
-                    events[i].data.fd = -1;
-                }
-            }
-            // 有数据发送
-            else if (events[i].events & EPOLLOUT) {
-                int sockfd = events[i].data.fd;
-
-                // 收到什么就发送什么
-                write(sockfd, resv_message, BUFF_SIZE);
-
-                ev.data.fd=sockfd;
-                ev.events=EPOLLIN|EPOLLET;
-                //写完后，这个sockfd准备读
-                epoll_ctl(efd,EPOLL_CTL_MOD,sockfd,&ev);
             }
         }
+
     }
 
-    
+    close(lfd);
+    close(epfd);
     return 0;
 }

@@ -1,51 +1,56 @@
 #include <stdio.h>
+#include <arpa/inet.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <errno.h>
 #include <string.h>
-#include <arpa/inet.h>
 
-int main(int argc,char* argv[])
-{
-    struct sockaddr_in serverAddr;
-    int nFd = 0;
-    int nRet = 0;
-    int nReadLen = 0;
-    char szBuff[BUFSIZ] = {0};
+#define SERVPORT 11277
+ 
+int main(int argc,char *argv[]) {
 
-    /* 创建套接字描述符 */
-    nFd = socket(AF_INET,SOCK_STREAM,0);
-    if (-1 == nFd)
-    {
-        perror("socket:");
+    int fd = socket(PF_INET, SOCK_STREAM, 0);
+    if(fd == -1) {
+        perror("socket");
         return -1;
     }
 
-    serverAddr.sin_family = AF_INET;
-    serverAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
-    serverAddr.sin_port = htons(8000);//默认以8080端口连接
+    struct sockaddr_in seraddr;
+    inet_pton(AF_INET, "127.0.0.1", &seraddr.sin_addr.s_addr);
+    seraddr.sin_family = AF_INET;
+    seraddr.sin_port = htons(8000);
 
-    /* 和服务器端建立连接 */
-    nRet = connect(nFd,(struct sockaddr*)&serverAddr,sizeof(serverAddr));
-    if (nRet == -1)
-    {
-        printf("connect:");
+    int ret = connect(fd, (struct sockaddr *)&seraddr, sizeof(seraddr));
+
+    if(ret == -1){
+        perror("connect");
         return -1;
     }
 
-    while(1)
-    {
-        /* 从终端读取数据 */
-        sleep(1);
-        memset(szBuff,0,BUFSIZ);
-        sprintf(szBuff, "Im clinet\n");
-        
-        write(nFd,szBuff,strlen(szBuff));
-        
+    int num = 0;
+
+    while (1) {
+        char sendBuf[1024] = {0};
+        sprintf(sendBuf, "send data %d", num++);
+        write(fd, sendBuf, strlen(sendBuf) + 1);
+
+        // 接收
+        int len = read(fd, sendBuf, sizeof(sendBuf));
+        if(len == -1) {
+            perror("read");
+            return -1;
+        }else if(len > 0) {
+            printf("read buf = %s\n", sendBuf);
+        } else {
+            printf("服务器已经断开连接...\n");
+            break;
+        }
+        // sleep(1);
+        usleep(1000);
     }
+    
+
+    //4.关闭
+    close(fd);
+    return 0;
 
 }
