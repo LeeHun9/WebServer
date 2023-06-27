@@ -42,12 +42,12 @@ int main(int argc, char** argv) {
 
     threadpool<http_conn>* pool = NULL;
     try {
-        pool = new threadpool<http_conn>;
+        pool = new threadpool<http_conn>;       // 创建线程池对象
     } catch (...) {
         return 1;
     }
 
-    http_conn* user = new http_conn[MAX_FD];
+    http_conn* users = new http_conn[MAX_FD];
 
     int listenfd = socket(AF_INET, SOCK_STREAM, 0);
 
@@ -68,7 +68,39 @@ int main(int argc, char** argv) {
 
     // 添加监听描述符到epoll
     addfd(epollfd, listenfd, false);
-    
+    http_conn::m_epollfd = epollfd;
+
+    while (1) {
+        int num = epoll_wait(epollfd, events, MAX_EVENT_NUM, -1);
+
+        if (num < 0 && errno != EINTR) {
+            printf("epoll_wait failed\n");
+            break;
+        }
+
+        for (int i = 0; i < num; ++i) {
+            int sockfd = events[i].data.fd;
+
+            // 有客户端连接
+            if (sockfd == listenfd) {
+                struct sockaddr_in client_address;
+                socklen_t client_addrlength = sizeof(client_address);
+                int connfd = accept(sockfd, (struct sockaddr*)&client_address, &client_addrlength);
+
+                if (connfd < 0) {
+                    printf("errno: %d\n", errno);
+                    continue;
+                }
+
+                if (http_conn::m_user_count >= MAX_FD) {
+                    close(sockfd);
+                    continue;
+                }
+
+                users[connfd].init(connfd, client_address); 
+            }
+        }
+    }
 
 
 
