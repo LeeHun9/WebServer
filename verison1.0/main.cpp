@@ -98,11 +98,34 @@ int main(int argc, char** argv) {
                 }
 
                 users[connfd].init(connfd, client_address); 
+            } 
+            // 若该socket出现若干问题，内核无法继续从socket中读数据到缓冲区：
+            // EPOLLRDHUP 表示对等方连接处于半关闭；EPOLLHUP表示对等放已经关闭连接；EPOLLERR表示socket中有错误。
+            else if (events[i].events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR)) {
+                users[sockfd].close_conn();
+            }
+            // EPOLLIN 表示内科已经将一些数据从socket中读取到缓冲区中，用户可以从缓冲区中读取数据
+            else if (events[i].events & EPOLLIN) {
+                if (users[sockfd].read()) {
+                    // 将这个任务交给线程池的某个线程
+                    pool->append(users + sockfd);
+                } else {
+                    users[sockfd].close_conn();
+                }
+            }
+            // EPOLLOUT 表示内核已经把需要写入fd的数据准备好了
+            else if (events[i].events & EPOLLOUT) {
+                if (!users[sockfd].write()) {
+                    users[sockfd].close_conn();
+                }
             }
         }
     }
 
+    close(epollfd);
+    close(listenfd);
+    delete [] users;
+    delete pool;
 
-
-
+    return 0;
 }
