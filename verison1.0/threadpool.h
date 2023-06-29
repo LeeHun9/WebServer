@@ -37,7 +37,7 @@ private:
     // 保护请求队列的互斥锁
     locker m_queuelocker;   
 
-    // 是否有任务需要处理
+    // 任务队列，表示是否有任务需要处理
     sem m_queuestat;
 
     // 是否结束线程          
@@ -90,6 +90,7 @@ bool threadpool< T >::append( T* request )
     }
     m_workqueue.push_back(request);
     m_queuelocker.unlock();
+    // P操作，向队列中添加任务
     m_queuestat.post();
     return true;
 }
@@ -106,6 +107,7 @@ template< typename T >
 void threadpool< T >::run() {
 
     while (!m_stop) {
+        // V操作，等待队列中有任务到来
         m_queuestat.wait();
         m_queuelocker.lock();
         if ( m_workqueue.empty() ) {

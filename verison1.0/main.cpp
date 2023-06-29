@@ -13,7 +13,7 @@
 #include "threadpool.h"
 #include "http_conn.h"
 
-#define MAX_FD 65535
+#define MAX_FD 65535            // 最大连接数
 #define MAX_EVENT_NUM 10000
 
 extern void addfd(int epollfd, int fd, bool oneshot);
@@ -47,7 +47,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    http_conn* users = new http_conn[MAX_FD];
+    http_conn* users = new http_conn[MAX_FD];       
 
     int listenfd = socket(AF_INET, SOCK_STREAM, 0);
 
@@ -57,18 +57,21 @@ int main(int argc, char** argv) {
     address.sin_family = AF_INET;
     address.sin_port = htons(port);
 
+
+    // 设置端口复用，多个客户端复用同一个监听端口
     int reuse = 1;
     setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
 
     ret = bind(listenfd, (struct sockaddr*)&address, sizeof(address));
     ret = listen(listenfd, 5);
 
+    // 创建epoll对象、事件数组
     epoll_event events[MAX_EVENT_NUM];
     int epollfd = epoll_create(5);
 
     // 添加监听描述符到epoll
     addfd(epollfd, listenfd, false);
-    http_conn::m_epollfd = epollfd;
+    http_conn::m_epollfd = epollfd;     // 初始化类静态变量 m_epollfd
 
     while (1) {
         int num = epoll_wait(epollfd, events, MAX_EVENT_NUM, -1);
