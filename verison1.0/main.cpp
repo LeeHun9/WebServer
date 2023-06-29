@@ -81,6 +81,8 @@ int main(int argc, char** argv) {
             break;
         }
 
+
+        // 遍历
         for (int i = 0; i < num; ++i) {
             int sockfd = events[i].data.fd;
 
