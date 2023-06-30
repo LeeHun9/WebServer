@@ -18,7 +18,7 @@ public:
 
 private:
     /*工作线程运行的函数，它不断从工作队列中取出任务并执行之*/
-    static void* worker(void* arg);
+    static void* worker(void* arg);     // thread_create需要传入一个静态函数
     void run();
 
 private:
@@ -31,13 +31,13 @@ private:
     // 请求队列中最多允许的、等待处理的请求的数量  
     int m_max_requests; 
     
-    // 请求队列
+    // 任务请求队列
     std::list< T* > m_workqueue;  
 
     // 保护请求队列的互斥锁
     locker m_queuelocker;   
 
-    // 任务队列，表示是否有任务需要处理
+    // 信号量，表示等待处理的任务个数
     sem m_queuestat;
 
     // 是否结束线程          
@@ -53,6 +53,7 @@ threadpool< T >::threadpool(int thread_number, int max_requests) :
         throw std::exception();
     }
 
+    // 为工作线程申请空间
     m_threads = new pthread_t[m_thread_number];
     if(!m_threads) {
         throw std::exception();

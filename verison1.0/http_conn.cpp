@@ -55,7 +55,7 @@ void http_conn::close_conn() {
     if (m_sockfd != -1) {
         delfd(m_epollfd, m_sockfd);
         m_sockfd = -1;
-        m_user_count--;
+        --m_user_count;
     }
 }
 
@@ -64,9 +64,10 @@ void http_conn::init(int sockfd, const sockaddr_in &addr) {
     m_address = addr;
 
     int reuse = 1;
-    setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    setsockopt(m_sockfd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
     // 添加sockfd到epoll监听
-    addfd(m_epollfd, sockfd, true);
+    addfd(m_epollfd, m_sockfd, true);
+    ++m_user_count;
     init();
 }
 
@@ -94,7 +95,7 @@ void http_conn::init() {
 
 // 一次性循环读取客户数据，直到无数据或者客户关闭连接
 bool http_conn::read() {
-    if (m_read_idx >= READ_BUFFER_SIZE) {
+    if (m_read_idx >= READ_BUFFER_SIZE) {   // 超出读缓冲区大小
         return false;
     }
     int bytes_read = 0;
@@ -103,11 +104,11 @@ bool http_conn::read() {
         // error occurred
         if (bytes_read == -1) {
             // 非阻塞模式下，没有数据需要读取了
-            if (errno ==EAGAIN || errno == EWOULDBLOCK) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 break;
             }
             return false;
-        } else if (bytes_read == 0) {
+        } else if (bytes_read == 0) {   // 客户关闭连接
             return false;
         }
         m_read_idx += bytes_read;
@@ -115,10 +116,11 @@ bool http_conn::read() {
     return true;
 }
 
-// 解析一行，之后m_checked_idx会指向下一行的开头
+// 解析一行，判断依据是"\r\n"。之后m_checked_idx会指向下一行的开头
 http_conn::LINE_STATUS http_conn::parse_line() {
     char tmp;
     for (; m_checked_idx < m_read_idx; ++m_checked_idx) {
+        // 逐位读取
         tmp = m_read_buf[m_checked_idx];
         if (tmp == '\r') {
             if (m_checked_idx + 1 == m_read_idx) {
@@ -131,7 +133,7 @@ http_conn::LINE_STATUS http_conn::parse_line() {
             return LINE_BAD;
         } else if (tmp == '\n') {
             if ((m_checked_idx > 1) && (m_read_buf[m_checked_idx-1] == '\r')) {
-                m_read_buf[m_checked_idx++] = '\0';
+                m_read_buf[m_checked_idx-1] = '\0';
                 m_read_buf[m_checked_idx++] = '\0';
                 return LINE_OK;
             }
@@ -155,6 +157,7 @@ http_conn::HTTP_CODE http_conn::parse_request_line(char* text) {
     char* method = text;
     // 只支持GET请求方式
     if (strcasecmp(method, "GET") == 0) {   // strcasecmp 不区分大小写
+        printf("HTTP Request Method is GET\n");
         m_method = GET;
     } else {
         return BAD_REQUEST;
@@ -232,12 +235,12 @@ http_conn::HTTP_CODE http_conn::do_request() {
     strncpy(m_real_file + len, m_url, FILENAME_LEN-len-1);
     // 获取请求文件属性
     if (stat(m_real_file, &m_file_stat) < 0) {
-        return NO_REQUEST;
+        return NO_RESOURCE;
     }
 
     // 判断访问权限
     if (!(m_file_stat.st_mode & S_IROTH)) {
-        return BAD_REQUEST;
+        return FORBIDDEN_REQUEST;
     }
 
     // 判断是否是目录
@@ -248,7 +251,7 @@ http_conn::HTTP_CODE http_conn::do_request() {
     // 只读打开文件
     int fd = open(m_real_file, O_RDONLY);
 
-    // 创建文件虚拟内存映射
+    // 创建文件虚拟内存映射，映射地址设为随机（NULL）
     m_file_address = (char*)mmap(NULL, m_file_stat.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
     close(fd);
     return FILE_REQUEST;
@@ -259,7 +262,7 @@ http_conn::HTTP_CODE http_conn::process_read() {
     LINE_STATUS line_status = LINE_OK;
     HTTP_CODE ret = NO_REQUEST;
     char* text = 0;
-    while ((m_check_state == CHECK_STATE_CONTENT && line_status == LINE_OK) ||
+    while (((m_check_state == CHECK_STATE_CONTENT) && (line_status == LINE_OK)) ||
      ((line_status = parse_line()) == LINE_OK)) {
         // 读取一行数据
         text = get_line();
@@ -276,8 +279,8 @@ http_conn::HTTP_CODE http_conn::process_read() {
             }
             case CHECK_STATE_HEADER: {
                 ret = parse_headers(text);
-                if (ret == NO_REQUEST) {
-                    return NO_REQUEST;
+                if (ret == BAD_REQUEST) {        // bug 点：NO_REQUEST，设置成 BAD_REQUEST 可解决
+                    return BAD_REQUEST;
                 } else if (ret == GET_REQUEST) {
                     return do_request();
                 }
@@ -311,7 +314,7 @@ void http_conn::unmap() {
 bool http_conn::write() {
     int tmp = 0;
     if (bytes_to_send == 0) {
-        // 表示这一次响应结束
+        // 表示这一次响应结束，epoll设置socket监听数据到来
         modfd(m_epollfd, m_sockfd, EPOLLIN);
         init();
         return true;
@@ -363,7 +366,7 @@ bool http_conn::add_response(const char* format, ...) {
     }
     va_list arg_list;
     va_start(arg_list, format);
-    int len = vsnprintf(m_write_buf + m_write_idx, WRITE_BUFFER_SIZE, format, arg_list);
+    int len = vsnprintf(m_write_buf + m_write_idx, WRITE_BUFFER_SIZE - 1 - m_write_idx, format, arg_list);
     if (len >= WRITE_BUFFER_SIZE - m_write_idx -1) {
         return false;
     }

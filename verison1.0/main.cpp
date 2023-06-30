@@ -88,20 +88,23 @@ int main(int argc, char** argv) {
 
             // 有客户端连接
             if (sockfd == listenfd) {
+
                 struct sockaddr_in client_address;
                 socklen_t client_addrlength = sizeof(client_address);
-                int connfd = accept(sockfd, (struct sockaddr*)&client_address, &client_addrlength);
+                int connfd = accept(listenfd, (struct sockaddr*)&client_address, &client_addrlength);
 
                 if (connfd < 0) {
                     printf("errno: %d\n", errno);
                     continue;
                 }
 
+                // 超出最大用户
                 if (http_conn::m_user_count >= MAX_FD) {
-                    close(sockfd);
+                    close(connfd);
                     continue;
                 }
 
+                // 初始化连接
                 users[connfd].init(connfd, client_address); 
             } 
             // 若该socket出现若干问题，内核无法继续从socket中读数据到缓冲区：
@@ -109,8 +112,9 @@ int main(int argc, char** argv) {
             else if (events[i].events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR)) {
                 users[sockfd].close_conn();
             }
-            // EPOLLIN 表示内科已经将一些数据从socket中读取到缓冲区中，用户可以从缓冲区中读取数据
+            // EPOLLIN 表示内核已经将一些数据从缓冲区中读取到socket中，用户可以从socket中读取数据
             else if (events[i].events & EPOLLIN) {
+                // 若从该socket中读取到数据
                 if (users[sockfd].read()) {
                     // 将这个任务交给线程池的某个线程
                     pool->append(users + sockfd);
@@ -120,6 +124,7 @@ int main(int argc, char** argv) {
             }
             // EPOLLOUT 表示内核已经把需要写入fd的数据准备好了
             else if (events[i].events & EPOLLOUT) {
+                // 向socket中写入响应
                 if (!users[sockfd].write()) {
                     users[sockfd].close_conn();
                 }
@@ -127,6 +132,7 @@ int main(int argc, char** argv) {
         }
     }
 
+    // 收尾处理
     close(epollfd);
     close(listenfd);
     delete [] users;
